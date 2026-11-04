@@ -1,0 +1,175 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  OWNER
+  EDITOR
+  VIEWER
+}
+
+enum TokenType {
+  EMAIL_VERIFY
+  PASSWORD_RESET
+}
+
+enum ProjectStatus {
+  DRAFT
+  UPLOADING
+  QUEUED
+  PROCESSING
+  TRANSCRIBING
+  ANALYZING
+  READY_FOR_REVIEW
+  RENDERING
+  COMPLETED
+  FAILED
+  EXPIRED
+}
+
+enum Platform {
+  YOUTUBE_SHORTS
+  INSTAGRAM_REELS
+  TIKTOK
+  ALL
+}
+
+enum RenderStatus {
+  QUEUED
+  RENDERING
+  DONE
+  FAILED
+}
+
+model User {
+  id              String       @id @default(cuid())
+  email           String       @unique
+  name            String?
+  passwordHash    String?
+  emailVerified   DateTime?
+  isPlatformAdmin Boolean      @default(false)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  memberships     Membership[]
+  tokens          AuthToken[]
+  projects        Project[]
+}
+
+model Workspace {
+  id          String       @id @default(cuid())
+  name        String
+  credits     Int          @default(10)
+  createdAt   DateTime     @default(now())
+  memberships Membership[]
+  projects    Project[]
+}
+
+model Membership {
+  id          String    @id @default(cuid())
+  userId      String
+  workspaceId String
+  role        Role      @default(OWNER)
+  createdAt   DateTime  @default(now())
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, workspaceId])
+}
+
+// Only the SHA-256 hash of the emailed token is stored.
+model AuthToken {
+  id        String    @id @default(cuid())
+  userId    String
+  type      TokenType
+  tokenHash String    @unique
+  expiresAt DateTime
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type])
+}
+
+model Project {
+  id               String        @id @default(cuid())
+  workspaceId      String
+  createdById      String
+  name             String
+  status           ProjectStatus @default(DRAFT)
+  errorMessage     String?
+  sourceExt        String?
+  originalFilename String?
+  sizeBytes        BigInt?
+  durationSec      Float?
+  desiredClips     Int           @default(5)
+  whisperModel     String?
+  archivedAt       DateTime?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+  workspace        Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy        User          @relation(fields: [createdById], references: [id])
+  transcript       Transcript?
+  clips            Clip[]
+  renders          Render[]
+
+  @@index([workspaceId, archivedAt, createdAt])
+}
+
+model Transcript {
+  id          String   @id @default(cuid())
+  projectId   String   @unique
+  language    String?
+  durationSec Float?
+  text        String   @db.Text
+  segments    Json
+  words       Json?
+  updatedAt   DateTime @updatedAt
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+model Clip {
+  id          String   @id @default(cuid())
+  projectId   String
+  startSec    Float
+  endSec      Float
+  title       String
+  hook        String
+  summary     String   @db.Text
+  reason      String   @db.Text
+  platform    Platform @default(ALL)
+  confidence  Float
+  captionText String?  @db.Text
+  selected    Boolean  @default(true)
+  style       Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  renders     Render[]
+
+  @@index([projectId, startSec])
+}
+
+// One row per render attempt. `spec` snapshots the clip (times, hook, caption, style)
+// when the render is queued, so edits made while it waits never change the output.
+model Render {
+  id        String       @id @default(cuid())
+  projectId String
+  clipId    String
+  status    RenderStatus @default(QUEUED)
+  aspect    String
+  spec      Json
+  error     String?
+  sizeBytes BigInt?
+  expiresAt DateTime?
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+  project   Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  clip      Clip         @relation(fields: [clipId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, createdAt])
+  @@index([clipId, createdAt])
+}
