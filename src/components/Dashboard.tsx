@@ -91,7 +91,7 @@ export function Dashboard({
       res = await fetch(`/api/projects/${p.id}`, { method: "DELETE" });
     }
     if (!res.ok) {
-      setError(((await res.json().catch(() => ({}))) as { error?: string }).error ?? "That didn't work.");
+      setError(((await res.json().catch(() => ({}))) as { error?: string }).error ?? `That didn't work (server error ${res.status}).`);
       return;
     }
     await load(tab);
