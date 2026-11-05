@@ -12,6 +12,7 @@ import {
   type RenderJob,
 } from "../src/lib/queue";
 import { audioPath, projectDir, renderPath, sourcePath } from "../src/lib/storage";
+import { downloadBlob } from "../src/lib/blob";
 import { renderClip } from "../src/lib/render/run";
 import { resolveStyle, type RenderSpec, type TimedSegment, type TimedWord } from "../src/lib/render/spec";
 import path from "node:path";
@@ -23,18 +24,28 @@ async function setStatus(projectId: string, status: ProjectStatus, errorMessage:
   await prisma.project.update({ where: { id: projectId }, data: { status, errorMessage } });
 }
 
+/** Returns the local path of the source video, downloading it from Blob storage first if needed. */
+async function ensureSource(project: { id: string; sourceExt: string | null; sourceBlob: string | null }) {
+  if (!project.sourceExt) throw new UserFacingError("The source video is missing.");
+  const file = sourcePath(project.id, project.sourceExt);
+  if (await fs.stat(file).then(() => true, () => false)) return file;
+  if (!project.sourceBlob) throw new UserFacingError("The source video is missing.");
+  await downloadBlob(project.sourceBlob, file);
+  return file;
+}
+
 async function process_(job: Job<ProcessingJob>) {
   const env = getEnv();
   const { projectId, mode } = job.data;
   const project = await prisma.project.findUnique({ where: { id: projectId }, include: { transcript: true } });
   if (!project || !project.sourceExt) return; // deleted or never uploaded
 
-  const src = sourcePath(projectId, project.sourceExt);
   let durationSec = project.durationSec;
 
   // 1. Probe + extract audio
   if (!durationSec || (mode === "full" && !project.transcript)) {
     await setStatus(projectId, "PROCESSING");
+    const src = await ensureSource(project);
     const info = await probe(src);
     if (info.durationSec > env.MAX_VIDEO_MINUTES * 60) {
       throw new UserFacingError(`Videos can be at most ${env.MAX_VIDEO_MINUTES} minutes long.`);
@@ -47,7 +58,7 @@ async function process_(job: Job<ProcessingJob>) {
   // 2. Transcribe (skipped when a transcript already exists, e.g. on re-analysis or retry)
   let segments = project.transcript?.segments as { id: number; start: number; end: number; text: string }[] | undefined;
   if (!project.transcript) {
-    await extractAudio(src, audioPath(projectId));
+    await extractAudio(await ensureSource(project), audioPath(projectId));
     await setStatus(projectId, "TRANSCRIBING");
     const model = project.whisperModel ?? env.WHISPER_MODEL;
     const t = await transcribeAudio(audioPath(projectId), model);
@@ -149,7 +160,7 @@ async function processRender(job: Job<RenderJob>) {
 
   const output = renderPath(project.id, render.id);
   await renderClip({
-    input: sourcePath(project.id, project.sourceExt),
+    input: await ensureSource(project),
     output,
     workDir: path.join(projectDir(project.id), `work-${render.id}`),
     spec,

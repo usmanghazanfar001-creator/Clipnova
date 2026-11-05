@@ -4,6 +4,7 @@ import { Readable } from "node:stream";
 import { HttpError, handle } from "@/lib/http";
 import { getScopedProject, requireCtx } from "@/lib/rbac";
 import { MIME_BY_EXT, sourcePath } from "@/lib/storage";
+import { issueSignedToken, presignUrl } from "@vercel/blob";
 
 export const runtime = "nodejs";
 
@@ -18,6 +19,13 @@ export const GET = handle(async (req: Request, { params }: Params) => {
 
   const file = sourcePath(id, project.sourceExt);
   const stat = await fsp.stat(file).catch(() => null);
+  if (!stat && project.sourceBlob) {
+    // Video lives in private Blob storage: hand the browser a short-lived signed URL (supports seeking).
+    const validUntil = Date.now() + 30 * 60 * 1000;
+    const token = await issueSignedToken({ pathname: project.sourceBlob, operations: ["get"], validUntil });
+    const { presignedUrl } = await presignUrl(token, { operation: "get", pathname: project.sourceBlob, access: "private", validUntil });
+    return new Response(null, { status: 302, headers: { Location: presignedUrl, "Cache-Control": "private, no-store" } });
+  }
   if (!stat) throw new HttpError(404, "Video file not found.");
 
   const headers: Record<string, string> = {

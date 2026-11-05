@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { HttpError, handle } from "@/lib/http";
 import { CAN_EDIT, getScopedProject, requireCtx, requireRole } from "@/lib/rbac";
 import { serializeProject } from "@/lib/serialize";
+import { copyBlob, sourceBlobPath } from "@/lib/blob";
 import { ensureProjectDir, removeProjectFiles, sourcePath } from "@/lib/storage";
 
 type Params = { params: Promise<{ id: string }> };
@@ -68,8 +69,14 @@ export const POST = handle(async (_req: Request, { params }: Params) => {
 
   if (complete) {
     try {
-      await ensureProjectDir(copy.id);
-      await fs.copyFile(sourcePath(id, full.sourceExt!), sourcePath(copy.id, full.sourceExt!));
+      if (full.sourceBlob) {
+        const to = sourceBlobPath(copy.id, full.sourceExt!);
+        await copyBlob(full.sourceBlob, to);
+        await prisma.project.update({ where: { id: copy.id }, data: { sourceBlob: to } });
+      } else {
+        await ensureProjectDir(copy.id);
+        await fs.copyFile(sourcePath(id, full.sourceExt!), sourcePath(copy.id, full.sourceExt!));
+      }
     } catch (e) {
       console.error("[duplicate] file copy failed", e);
       await prisma.project.delete({ where: { id: copy.id } });

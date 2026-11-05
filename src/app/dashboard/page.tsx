@@ -1,3 +1,4 @@
+import { blobConfigured } from "@/lib/blob";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { getEnv } from "@/lib/env";
@@ -26,6 +27,7 @@ export default async function DashboardPage() {
           canEdit={ctx.role !== "VIEWER" || ctx.isPlatformAdmin}
           canDelete={ctx.role === "OWNER" || ctx.isPlatformAdmin}
           maxUploadMb={env.MAX_UPLOAD_MB}
+          blobUploads={blobConfigured()}
           maxMinutes={env.MAX_VIDEO_MINUTES}
         />
       </main>

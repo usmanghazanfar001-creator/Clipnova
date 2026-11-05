@@ -102,6 +102,7 @@ model Project {
   status           ProjectStatus @default(DRAFT)
   errorMessage     String?
   sourceExt        String?
+  sourceBlob       String?
   originalFilename String?
   sizeBytes        BigInt?
   durationSec      Float?

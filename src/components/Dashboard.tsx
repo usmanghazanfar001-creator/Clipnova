@@ -1,5 +1,6 @@
 "use client";
 
+import { upload } from "@vercel/blob/client";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
@@ -7,6 +8,7 @@ import type { ProjectDTO } from "@/lib/serialize";
 import { ACTIVE_STATUSES, STATUS_LABEL, statusTone } from "@/lib/status";
 
 const EXTS = [".mp4", ".mov", ".webm", ".mkv"];
+const MIME: Record<string, string> = { ".mp4": "video/mp4", ".mov": "video/quicktime", ".webm": "video/webm", ".mkv": "video/x-matroska" };
 
 function fmtSize(bytes: number | null) {
   if (bytes === null) return "";
@@ -44,12 +46,14 @@ export function Dashboard({
   canEdit,
   canDelete,
   maxUploadMb,
+  blobUploads,
   maxMinutes,
 }: {
   initialProjects: ProjectDTO[];
   canEdit: boolean;
   canDelete: boolean;
   maxUploadMb: number;
+  blobUploads: boolean;
   maxMinutes: number;
 }) {
   const router = useRouter();
@@ -151,12 +155,12 @@ export function Dashboard({
         </div>
       )}
 
-      {showNew && <NewProject maxUploadMb={maxUploadMb} onClose={() => setShowNew(false)} />}
+      {showNew && <NewProject maxUploadMb={maxUploadMb} blobUploads={blobUploads} onClose={() => setShowNew(false)} />}
     </div>
   );
 }
 
-function NewProject({ maxUploadMb, onClose }: { maxUploadMb: number; onClose: () => void }) {
+function NewProject({ maxUploadMb, blobUploads, onClose }: { maxUploadMb: number; blobUploads: boolean; onClose: () => void }) {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
   const [error, setError] = useState("");
@@ -186,7 +190,28 @@ function NewProject({ maxUploadMb, onClose }: { maxUploadMb: number; onClose: ()
         id = data.project.id;
         setCreatedId(id);
       }
-      await uploadWithProgress(`/api/projects/${id}/upload`, file, setPct);
+      if (blobUploads) {
+        // Direct browser-to-Blob upload (bypasses Vercel's 4.5 MB request limit), then finalize.
+        const ext = EXTS.find((x) => file.name.toLowerCase().endsWith(x))!;
+        await upload(`projects/${id}/source${ext}`, file, {
+          access: "private",
+          handleUploadUrl: `/api/projects/${id}/upload/blob`,
+          contentType: MIME[ext],
+          multipart: true,
+          onUploadProgress: ({ percentage }) => setPct(Math.min(99, Math.round(percentage))),
+        });
+        const done = await fetch(`/api/projects/${id}/upload/complete`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ filename: file.name }),
+        });
+        if (!done.ok) {
+          throw new Error(((await done.json().catch(() => ({}))) as { error?: string }).error ?? "Couldn't finish the upload.");
+        }
+        setPct(100);
+      } else {
+        await uploadWithProgress(`/api/projects/${id}/upload`, file, setPct);
+      }
       router.push(`/projects/${id}`);
     } catch (err) {
       setPct(null);

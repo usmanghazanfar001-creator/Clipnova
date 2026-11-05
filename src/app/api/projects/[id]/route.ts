@@ -4,6 +4,7 @@ import { handle, readJson } from "@/lib/http";
 import { CAN_EDIT, getScopedProject, requireCtx, requireRole } from "@/lib/rbac";
 import { serializeClip, serializeProject } from "@/lib/serialize";
 import { removeProjectFiles } from "@/lib/storage";
+import { deleteBlob } from "@/lib/blob";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -50,8 +51,9 @@ export const DELETE = handle(async (_req: Request, { params }: Params) => {
   const ctx = await requireCtx();
   requireRole(ctx, "OWNER");
   const { id } = await params;
-  await getScopedProject(ctx, id);
+  const project = await getScopedProject(ctx, id);
   await prisma.project.delete({ where: { id } });
+  await deleteBlob(project.sourceBlob).catch((e) => console.error("[delete] blob cleanup failed", e));
   // Files live on the machine that ran the upload; failing to remove them must not fail the delete.
   await removeProjectFiles(id).catch((e) => console.error("[delete] file cleanup failed", e));
   return Response.json({ ok: true });
