@@ -39,7 +39,6 @@ async function postJson(url: string, body: unknown) {
 }
 
 export function LoginForm({ googleEnabled }: { googleEnabled: boolean }) {
-  const router = useRouter();
   const params = useSearchParams();
   const [error, setError] = useState(params.get("error") === "invalid_link" ? "That verification link is invalid or has expired." : "");
   const [busy, setBusy] = useState(false);
@@ -49,22 +48,35 @@ export function LoginForm({ googleEnabled }: { googleEnabled: boolean }) {
     setBusy(true);
     setError("");
     const f = new FormData(e.currentTarget);
-    const res = await signIn("credentials", {
-      email: String(f.get("email")),
-      password: String(f.get("password")),
-      redirect: false,
-    });
+    let res: Awaited<ReturnType<typeof signIn>>;
+    try {
+      res = await signIn("credentials", {
+        email: String(f.get("email")),
+        password: String(f.get("password")),
+        redirect: false,
+      });
+    } catch {
+      setBusy(false);
+      setError("Sign-in service is misconfigured (check NEXTAUTH_URL and NEXTAUTH_SECRET on the server).");
+      return;
+    }
     setBusy(false);
-    if (res?.error) {
+    if (!res) {
+      setError("Sign-in service did not respond. Check NEXTAUTH_URL (must start with https://) and NEXTAUTH_SECRET.");
+      return;
+    }
+    if (res.error || !res.ok) {
       setError(
         res.error === "EMAIL_NOT_VERIFIED"
           ? "Please verify your email first. Check your inbox for the link."
-          : "Incorrect email or password.",
+          : res.error === "CredentialsSignin"
+            ? "Incorrect email or password."
+            : `Sign-in failed (${res.error ?? "unknown"}). Check NEXTAUTH_URL and NEXTAUTH_SECRET on the server.`,
       );
       return;
     }
-    router.push("/dashboard");
-    router.refresh();
+    // Full page load so the new session cookie is sent to the middleware.
+    window.location.assign("/dashboard");
   }
 
   return (
