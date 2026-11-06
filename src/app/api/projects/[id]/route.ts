@@ -1,60 +1,31 @@
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { handle, readJson } from "@/lib/http";
-import { CAN_EDIT, getScopedProject, requireCtx, requireRole } from "@/lib/rbac";
-import { serializeClip, serializeProject } from "@/lib/serialize";
-import { removeProjectFiles } from "@/lib/storage";
-import { deleteBlob } from "@/lib/blob";
+import { CAN_EDIT, requireCtx, requireRole } from "@/lib/rbac";
+import { serializeProject } from "@/lib/serialize";
 
-type Params = { params: Promise<{ id: string }> };
-
-export const GET = handle(async (_req: Request, { params }: Params) => {
+export const GET = handle(async (req: Request) => {
   const ctx = await requireCtx();
-  const { id } = await params;
-  await getScopedProject(ctx, id);
-  const project = await prisma.project.findUniqueOrThrow({
-    where: { id },
-    include: { clips: { orderBy: { startSec: "asc" } }, transcript: true },
+  const archived = new URL(req.url).searchParams.get("archived") === "1";
+  const projects = await prisma.project.findMany({
+    where: { workspaceId: ctx.workspaceId, archivedAt: archived ? { not: null } : null },
+    orderBy: { createdAt: "desc" },
+    take: 100,
   });
-  return Response.json({
-    project: serializeProject(project),
-    clips: project.clips.map(serializeClip),
-    transcript: project.transcript
-      ? { language: project.transcript.language, segments: project.transcript.segments }
-      : null,
-    canEdit: CAN_EDIT.includes(ctx.role) || ctx.isPlatformAdmin,
-  });
+  return Response.json({ projects: projects.map(serializeProject), credits: ctx.credits });
 });
 
-const patchSchema = z.object({
-  name: z.string().trim().min(1).max(120).optional(),
-  archived: z.boolean().optional(),
+const createSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  desiredClips: z.number().int().min(1).max(8).default(5),
 });
 
-export const PATCH = handle(async (req: Request, { params }: Params) => {
+export const POST = handle(async (req: Request) => {
   const ctx = await requireCtx();
   requireRole(ctx, ...CAN_EDIT);
-  const { id } = await params;
-  await getScopedProject(ctx, id);
-  const body = patchSchema.parse(await readJson(req));
-  const project = await prisma.project.update({
-    where: { id },
-    data: {
-      ...(body.name !== undefined && { name: body.name }),
-      ...(body.archived !== undefined && { archivedAt: body.archived ? new Date() : null }),
-    },
+  const { name, desiredClips } = createSchema.parse(await readJson(req));
+  const project = await prisma.project.create({
+    data: { name, desiredClips, workspaceId: ctx.workspaceId, createdById: ctx.userId },
   });
-  return Response.json({ project: serializeProject(project) });
-});
-
-export const DELETE = handle(async (_req: Request, { params }: Params) => {
-  const ctx = await requireCtx();
-  requireRole(ctx, "OWNER");
-  const { id } = await params;
-  const project = await getScopedProject(ctx, id);
-  await prisma.project.delete({ where: { id } });
-  await deleteBlob(project.sourceBlob).catch((e) => console.error("[delete] blob cleanup failed", e));
-  // Files live on the machine that ran the upload; failing to remove them must not fail the delete.
-  await removeProjectFiles(id).catch((e) => console.error("[delete] file cleanup failed", e));
-  return Response.json({ ok: true });
+  return Response.json({ project: serializeProject(project) }, { status: 201 });
 });
